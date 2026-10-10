@@ -35,6 +35,7 @@ end.
 ```sh
 python configure.py            # debug build; add --release, --portable, --profile, --pgo=off, --lto=off
 ninja linux                    # build/linux/halo
+ninja steamdeck                # build/steamdeck/halo-steamdeck/: portable, release, Zen 2
 ninja android                  # the Android guest image and native libraries
 ninja android_apk              # the APK (Gradle)
 ninja windows                  # on Windows only

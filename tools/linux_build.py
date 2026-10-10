@@ -1,10 +1,12 @@
-"""Ninja rules for the native Linux build (``ninja linux``).
+"""Ninja rules for the native Linux builds (``ninja linux``, ``ninja steamdeck``).
 
 It compiles the game sources with clang for 32-bit x86 Linux, adds the
 platform layer in ``port/linux/src``, and links an ELF executable at
-``build/linux/halo``. See port/linux/README.md for the design.
+``build/linux/halo`` (and the Steam Deck's at ``build/steamdeck/halo``).
+See port/linux/README.md for the design.
 """
 
+import copy
 import json
 import os
 import re
@@ -244,7 +246,11 @@ def march_flag(sln: Any) -> str:
     """The instruction set of the native x86 builds: this machine's
     (-march=native, the default), or with configure.py --portable the
     baseline every x86-64 processor has (SSE2), for builds that run on other
-    computers. The game stays 32-bit code either way."""
+    computers. configure.py --march names a processor instead (znver2 for the
+    Steam Deck). The game stays 32-bit code either way."""
+    march = getattr(sln, "port_march", None)
+    if march:
+        return f"-march={march}"
     return "-march=x86-64" if getattr(sln, "port_portable", False) else "-march=native"
 
 
@@ -273,11 +279,13 @@ SDL_OPTIONS = [
 ]
 
 
-def portable_sdl(n: Writer, sln: Any, build_dir: Path, cc: str) -> Tuple[List[str], List[str], Path, Path, Path]:
+def portable_sdl(n: Writer, sln: Any, build_dir: Path, cc: str,
+                 name: str = "linux") -> Tuple[List[str], List[str], Path, Path, Path]:
     """The portable build's system root and SDL3: the compiler's flags, the
     linker's, what every unit waits for (the system root's stamp), the
     libSDL3.so.0 that the executable links to, and SDL's license (which the
-    release carries beside it)."""
+    release carries beside it). name keeps the rules of each build that has
+    them (linux, steamdeck) apart."""
     third_party = build_dir / "third_party"
     sysroot = third_party / "sysroot"
     sdl_source = third_party / "SDL3"
@@ -285,29 +293,29 @@ def portable_sdl(n: Writer, sln: Any, build_dir: Path, cc: str) -> Tuple[List[st
     sdl_build = build_dir / "sdl3-build"
     libsdl = sdl_build / "libSDL3.so.0"
     n.rule(
-        name="linux_sysroot",
+        name=f"{name}_sysroot",
         command=f"$python {SYSROOT_SCRIPT} {third_party}",
-        description="LINUX SYSROOT (Debian 11 i386, SDL3 source)",
+        description=f"{name.upper()} SYSROOT (Debian 11 i386, SDL3 source)",
         restat=True,
     )
     # (and SDL's license, which the release carries)
     sdl_license_source = sdl_source / "LICENSE.txt"
-    n.build(outputs=stamp, rule="linux_sysroot", implicit=[SYSROOT_SCRIPT], implicit_outputs=[sdl_license_source])
+    n.build(outputs=stamp, rule=f"{name}_sysroot", implicit=[SYSROOT_SCRIPT], implicit_outputs=[sdl_license_source])
     launcher = getattr(sln, "compiler_launcher", None)
     options = SDL_OPTIONS + ([f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}"] if launcher else [])
     n.rule(
-        name="linux_sdl3",
+        name=f"{name}_sdl3",
         command=(f"cmake -S {sdl_source} -B {sdl_build} -G Ninja --fresh "
                  f"-DCMAKE_TOOLCHAIN_FILE=$$PWD/{SYSROOT_TOOLCHAIN} -DHALO_SYSROOT=$$PWD/{sysroot} "
                  f"-DCMAKE_C_COMPILER={cc} {' '.join(options)} > {build_dir}/sdl3-configure.log && "
                  f"ninja -C {sdl_build} > {build_dir}/sdl3-build.log && "
                  f"$python {SYSROOT_SCRIPT} --check-sdl "
                  f"{sdl_build}/include-config-release/build_config/SDL_build_config.h"),
-        description="LINUX SDL3",
+        description=f"{name.upper()} SDL3",
         pool="console",
         restat=True,
     )
-    n.build(outputs=libsdl, rule="linux_sdl3", implicit=[stamp, SYSROOT_TOOLCHAIN])
+    n.build(outputs=libsdl, rule=f"{name}_sdl3", implicit=[stamp, SYSROOT_TOOLCHAIN])
     cflags = [f"--sysroot={_quote(sysroot)}", f"-isystem {_quote(sdl_source / 'include')}"]
     # (DT_RPATH rather than DT_RUNPATH: it comes before LD_LIBRARY_PATH,
     # which Steam sets for the games it starts, so that the SDL beside the
@@ -419,8 +427,6 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
         return
     config = _load_port_config()
     build_dir: Path = sln.build_dir / "linux"
-    obj_dir = build_dir / "obj"
-    output = build_dir / "halo"
     cc = sln.linux_cc or "clang"
     prefix_header = PORT_DIR / "include" / "halo_linux_prefix.h"
     semantics_header = build_dir / "halo_msvc_semantics.h"
@@ -489,12 +495,49 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
         pool="console",
     )
 
+    _linux_target(n, sln, config, cc, "linux", build_dir,
+                  prefix_header, semantics_header, platform_semantics_header)
+    _linux_target(n, steamdeck_sln(sln, cc), config, cc, "steamdeck", sln.build_dir / "steamdeck",
+                  prefix_header, semantics_header, platform_semantics_header)
+
+
+# The Steam Deck build (ninja steamdeck, build/steamdeck): the portable
+# build, which starts on SteamOS, in release, with code for the Deck's Zen 2
+# processor rather than any x86-64 processor's, whatever configure.py's
+# options make of ninja linux. The settings it does take from them are the
+# compiler's and the optimisations' (--lto, --pgo, --profile). It plays with
+# every other build: its floating point is the same (LINUX_ABI_FLAGS).
+STEAMDECK_MARCH = "znver2"
+
+
+def steamdeck_sln(sln: Any, cc: str) -> Any:
+    """configure.py's settings, as the Steam Deck build has them"""
+    deck = copy.copy(sln)
+    deck.port_release = True
+    deck.port_portable = True
+    deck.port_march = STEAMDECK_MARCH
+    # (the profile ninja linux trains, with --pgo=train, rather than a
+    # second training of its own)
+    if pgo_mode(sln) == "train":
+        deck.port_pgo = "use"
+        if pgo_profile(sln, LINUX_PROFILE, [], cc) == LINUX_PROFILE:
+            deck.port_pgo_profile = LINUX_PROFILE
+    return deck
+
+
+def _linux_target(n: Writer, sln: Any, config: Dict[str, Any], cc: str, name: str, build_dir: Path,
+                  prefix_header: Path, semantics_header: Path, platform_semantics_header: Path) -> None:
+    """one Linux build, ninja <name>, in build_dir, with sln's options"""
+    obj_dir = build_dir / "obj"
+    output = build_dir / "halo"
+    n.comment(f"ninja {name}")
+
     # the high-res HUD's textures (port/assets/hud; port/linux/src/hud_hires.c)
-    embedded_assets = hud_assets_build(n, "linux", build_dir / "generated" / "hud_hires_assets.c")
+    embedded_assets = hud_assets_build(n, name, build_dir / "generated" / "hud_hires_assets.c")
 
     # the portable build's system root and SDL3, or the build machine's
     if getattr(sln, "port_portable", False):
-        sysroot_cflags, sysroot_ldflags, sysroot_stamp, libsdl, sdl_license = portable_sdl(n, sln, build_dir, cc)
+        sysroot_cflags, sysroot_ldflags, sysroot_stamp, libsdl, sdl_license = portable_sdl(n, sln, build_dir, cc, name)
         sysroot_inputs = [sysroot_stamp]
         sdl_outputs = [build_dir / libsdl.name, sdl_license]
     else:
@@ -697,6 +740,32 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
     # internet play's MQTT brokers, a file beside the game (network.brokers_file)
     brokers = build_dir / "brokers.txt"
     n.build(outputs=brokers, rule="linux_copy", inputs=Path("port/assets/network/brokers.txt"))
-    n.build(outputs="linux", rule="phony",
-            inputs=[output, brokers, validator, *sdl_outputs])
+    package = steamdeck_package(n, build_dir, [output, brokers, *sdl_outputs]) if name == "steamdeck" else []
+    n.build(outputs=name, rule="phony",
+            inputs=[output, brokers, validator, *sdl_outputs, *package])
     n.newline()
+
+
+# what the Steam Deck build's folder (build/steamdeck/halo-steamdeck, to copy
+# to the Deck as it is) has besides the game: the notices the licences of
+# the code and fonts in it ask a copy to carry, as tools/ci_build.py's
+# release has them
+STEAMDECK_NOTICES = [
+    (Path("port/third_party/extract-xiso/LICENSE.TXT"), "extract-xiso-LICENSE.txt"),
+    (Path("port/third_party/mbedtls/LICENSE"), "mbedtls-LICENSE.txt"),
+    (Path("port/third_party/miniupnpc/LICENSE"), "miniupnpc-LICENSE.txt"),
+    (Path("port/assets/fonts/Overpass-OFL.txt"), "Overpass-OFL.txt"),
+    (Path("port/third_party/expat/COPYING"), "expat-COPYING.txt"),
+    (Path("port/third_party/opus/COPYING"), "opus-COPYING.txt"),
+    (Path("port/assets/icons/lucide/LICENSE"), "lucide-LICENSE.txt"),
+]
+
+
+def steamdeck_package(n: Writer, build_dir: Path, outputs: List[Path]) -> List[Path]:
+    """the Steam Deck build's folder: the build's outputs and the notices"""
+    package = build_dir / "halo-steamdeck"
+    files = []
+    for source, name in [(output, output.name) for output in outputs] + STEAMDECK_NOTICES:
+        files.append(package / name)
+        n.build(outputs=package / name, rule="linux_copy", inputs=source)
+    return files

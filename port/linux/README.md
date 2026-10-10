@@ -81,6 +81,22 @@ SDL3. You need the 32-bit glibc only for the tests.
 To see the glibc version that a build needs, enter
 `readelf -V build/linux/halo | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1`.
 
+### Steam Deck build
+
+`ninja steamdeck` makes a portable release build for the processor of the
+Steam Deck (Zen 2, `-march=znver2`), in `build/steamdeck/`. The options of
+`configure.py` do not change it, except `--lto`, `--pgo`, `--profile` and
+the compiler, so `ninja linux` and `ninja steamdeck` can be built from the
+same configuration. It needs the same tools as the portable build.
+
+`build/steamdeck/halo-steamdeck/` contains the game, its SDL3, `brokers.txt`
+and the licence notices. Copy this folder to the Deck, put `maps/` next to
+`halo`, and add `halo` to Steam (refer to "Steam Deck").
+
+The build does not start on a processor without the instructions of Zen 2
+(AVX2, for example). It plays network games with all other builds: all
+builds calculate the same floating-point results.
+
 ## Build the game
 
 1. Go to the root folder of the repository.

@@ -93,6 +93,7 @@ To build the game:
 | Target | Result |
 | --- | --- |
 | `ninja linux` | `build/linux/halo` |
+| `ninja steamdeck` (on Linux) | `build/steamdeck/halo-steamdeck/`, a folder to copy to a Steam Deck. Refer to "Steam Deck build" in [port/linux/README.md](port/linux/README.md#steam-deck-build). |
 | `ninja windows` (on Windows) | `build/windows/halo.exe` and `SDL3.dll` |
 | `ninja android_apk` | `port/android/app/build/outputs/apk/debug/app-debug.apk` |
 
@@ -111,6 +112,7 @@ Give these options to `configure.py`:
 | (none) | A debug build. A failed assertion stops the game. |
 | `--release` | A release build. The game does not examine assertions, as in the retail game. |
 | `--portable` | The Linux and Windows builds operate on all x86-64 processors. The Linux build also operates on older distributions and on SteamOS: refer to "Portable build" in [port/linux/README.md](port/linux/README.md#portable-build). Use this option for builds that you give to other persons. |
+| `--march=CPU` | The Linux and Windows builds use the instructions of this processor (clang's `-march`), for example `znver2`. |
 | `--lto=thin`, `--lto=off` | Less link-time optimization. The link is faster. |
 | `--pgo=off` | No profile-guided optimization. |
 | `--pgo=train` | Records a new optimization profile. Refer to "Optimization profiles". |

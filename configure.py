@@ -57,6 +57,12 @@ parser.add_argument(
     "pkgconf and wayland-scanner, not the 32-bit SDL 3",
 )
 parser.add_argument(
+    "--march",
+    metavar="CPU",
+    help="x86 builds (Linux, Windows): code for this processor (clang's -march), instead of this machine's "
+    "or, with --portable, any x86-64 processor's; znver2 for the Steam Deck",
+)
+parser.add_argument(
     "--pgo",
     nargs="?",
     const="train",
@@ -98,6 +104,7 @@ sln = SimpleNamespace(
     port_profile=args.profile,
     port_lto=args.lto,
     port_portable=args.portable,
+    port_march=args.march,
     port_pgo=args.pgo,
     port_pgo_profile=args.pgo_profile,
     android_ndk=args.android_ndk,
